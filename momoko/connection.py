@@ -777,17 +777,19 @@ class Connection(object):
         .. _Connection and cursor factories: http://initd.org/psycopg/docs/advanced.html#subclassing-cursor
         """
         cursors = []
-        queue = deque()
         callback = callback or _dummy_callback
 
-        for statement in statements:
-            if isinstance(statement, basestring):
-                queue.append((statement, ()))
+        def statement_iterator(statements):
+            yield ('BEGIN;', ())
+            for statement in statements:
+                if isinstance(statement, basestring):
+                    yield (statement, ())
+                else:
+                    yield statement[:2]
             else:
-                queue.append(statement[:2])
+                yield ('COMMIT;', ())
 
-        queue.appendleft(('BEGIN;', ()))
-        queue.append(('COMMIT;', ()))
+        queue = statement_iterator(statements)
 
         def error_callback(statement_error, cursor, rollback_error):
             callback(None, rollback_error or statement_error)
@@ -801,11 +803,12 @@ class Connection(object):
                 return
             if cursor:
                 cursors.append(cursor)
-            if not queue:
+            try:
+                operation, parameters = next(queue)
+            except StopIteration:
                 callback(cursors[1:-1], None)
                 return
 
-            operation, parameters = queue.popleft()
             self.execute(operation, parameters, cursor_factory, callback=exec_statement)
 
         self.ioloop.add_callback(exec_statement)
